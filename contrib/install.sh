@@ -111,14 +111,17 @@ elif [ -f /etc/SuSE-release ]; then
 	DISTRO="suse"
 	CRONTAB_DIR="/var/spool/cron/tabs"
 	WEB_USER="wwwrun"
-elif [ -f /etc/freebsd-update.conf ]; then
+elif [ -f /bin/freebsd-version ] && [ -f /etc/pkg/FreeBSD.conf ]; then
 	DISTRO="freebsd"
 	CRONTAB_DIR="/var/cron/tabs"
 	INIT_DIR=/usr/local/etc/rc.d/
 	WEB_USER="www"
 	GEOIP_DIR="/usr/local/share/GeoIP/"
-	# FreeBSD does better over HTTP than FTP
-	export PACKAGEROOT="http://ftp.freebsd.org"
+	# FreeBSD now uses pkgng for packages
+	# The first step here is to ensure pkgng
+	# is bootstrapped and ready to install packages
+	env ASSUME_ALWAYS_YES=YES pkg bootstrap
+	env ASSUME_ALWAYS_YES=YES pkg update -f
 	if [ ! -d "/usr/local/etc/$APACHE" ]; then
 		APACHE="apache22";
 	fi
@@ -189,9 +192,9 @@ ubuntu_get_node_packages(){
 
 freebsd_get_node_packages(){
 	if [ "$USE_LOCAL_MYSQL_PACKAGES" = 0 ]; then
-		pkg_add -Fr mysql55-server
+		pkg install -y mysql55-server
 	fi
-	pkg_add -Fr subversion wget curl  perl syslog-ng p5-App-cpanminus &&
+	pkg install -y subversion wget curl perl syslog-ng p5-App-cpanminus &&
 	enable_service "mysql" &&
 	service mysql-server start &&
 	disable_service "syslogd" &&
@@ -199,11 +202,11 @@ freebsd_get_node_packages(){
 	service syslogd stop
 	
 	# Check to see if we got syslog-ng v3 from pkg_add
-	pkg_info -E -x syslog-ng | cut -d\- -f3 | egrep "^3\."
+	pkg info -E -x syslog-ng | cut -d\- -f3 | egrep "^3\."
 	if [ $? -eq 1 ]; then
 		echo "Added old syslog-ng, correcting with syslog-ng3"
-		pkg_delete $(pkg_info -E -x syslog-ng) &&
-		pkg_add -r syslog-ng3
+		pkg delete $(pkg info -E -x syslog-ng) &&
+		pkg add -r syslog-ng
 	fi
 	
 	if [ \! -f /usr/local/etc/syslog-ng.conf ]; then
@@ -235,7 +238,7 @@ freebsd_get_node_packages(){
 freebsd_get_node_packages_ports(){
 	portsnap update
 	if [ $? -ne 0 ]; then
-		portsnap extract
+		portsnap fetch extract
 	fi
 		
 	# Install subversion
