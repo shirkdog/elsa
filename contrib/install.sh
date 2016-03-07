@@ -204,7 +204,7 @@ freebsd_get_node_packages(){
 	if [ "$USE_LOCAL_MYSQL_PACKAGES" = 0 ]; then
 		pkg install -y mysql55-server
 	fi
-	pkg install -y subversion wget curl perl5 syslog-ng p5-App-cpanminus &&
+	pkg install -y subversion wget curl perl5 syslog-ng34 p5-App-cpanminus &&
 	enable_service "mysql" &&
 	service mysql-server start &&
 	disable_service "syslogd" &&
@@ -223,7 +223,7 @@ freebsd_get_node_packages(){
 		cp /usr/local/etc/syslog-ng.conf.dist /usr/local/etc/syslog-ng.conf
 	fi
 
-	#In version 3.6 of syslog-ng, s_network is defined in the default conf
+	#s_network is defined in the default conf
 	sed -i '' -e 's/source s_network/source s_network_default/g' /usr/local/etc/syslog-ng.conf
 
 	if [ \! -f /usr/local/etc/elsa_syslog-ng.conf ]; then
@@ -243,7 +243,7 @@ freebsd_get_node_packages(){
 		fi
 	fi
 	#In version 3.6 of syslog-ng, nobackref is no longer a matcher flag
-	sed -i '' -e 's/ "nobackref"//g' /usr/local/etc/elsa_syslog-ng.conf
+	#sed -i '' -e 's/ "nobackref"//g' /usr/local/etc/elsa_syslog-ng.conf
 
 	enable_service "syslog-ng" &&
 	service syslog-ng start
@@ -253,10 +253,7 @@ freebsd_get_node_packages(){
 }	
 
 freebsd_get_node_packages_ports(){
-	portsnap update
-	if [ $? -ne 0 ]; then
-		portsnap fetch extract
-	fi
+	portsnap fetch extract
 		
 	# Install subversion
 	if [ \! -f /usr/local/bin/svn ]; then
@@ -615,12 +612,25 @@ allow_mysql_symbolic_links(){
 	if [ $DISTRO = "ubuntu" ]; then
 		MYCNF="/etc/mysql/my.cnf"
 	fi	
+	if [ $DISTRO = "freebsd" ]; then
+		#Note: based on default large config, for machines with 512MB
+		cp /usr/local/share/mysql/my-large.cnf /var/db/mysql/my.cnf
+		MYCNF="/var/db/mysql/my.cnf"
+	fi
 	echo "Checking $MYCNF for symbolic-links=0"
-	grep -P "^symbolic-links=0" $MYCNF
+	if [ $DISTRO = "freebsd" ]; then
+		grep -E "^symbolic-links=0" $MYCNF
+	else
+		grep -P "^symbolic-links=0" $MYCNF
+	fi
 	if [ $? -eq 0 ]; then
 		echo "Removing symbolic-links=0 from $MYCNF"
 		cp $MYCNF $MYCNF.elsabak &&
-		cat $MYCNF.elsabak | grep -vP "^symbolic-links=0" > $MYCNF
+		if [ $DISTRO = "freebsd" ]; then
+			cat $MYCNF.elsabak | grep -vE "^symbolic-links=0" > $MYCNF
+		else
+			cat $MYCNF.elsabak | grep -vP "^symbolic-links=0" > $MYCNF
+		fi
 		if [ $DISTRO = "centos" ]; then
 			service mysqld restart
 			return $?
@@ -1067,10 +1077,11 @@ build_web_perl(){
 		cpanm Test::Simple@0.98
 		
 		if [ "$DISTRO" = "freebsd" ]; then
-			cpanm Time::Local Time::HiRes Moose JSON::XS Config::JSON Plack::Builder Plack::Util Plack::App::File Date::Manip Digest::SHA1 MIME::Base64 URI::Escape Socket Net::DNS Sys::Hostname::FQDN String::CRC32 CHI CHI::Driver::RawMemory Search::QueryParser AnyEvent::DBI DBD::mysql EV Sys::Info Sys::MemInfo MooseX::Traits Authen::Simple Authen::Simple::DBI Authen::Simple::LDAP Net::LDAP::Express Net::LDAP::FilterBuilder Plack::Middleware::CrossOrigin URI::Escape Module::Pluggable Module::Install PDF::API2::Simple XML::Writer Parse::Snort Spreadsheet::WriteExcel IO::String Mail::Internet Plack::Middleware::Static Log::Log4perl Email::LocalDelivery Plack::Session Sys::Info CHI::Driver::DBI Plack::Builder::Conditionals URL::Encode MooseX::ClassAttribute MooseX::Log::Log4perl Authen::Simple::DBI Plack::Middleware::NoMultipleSlashes MooseX::Storage MooseX::Clone Data::Google::Visualization::DataSource Data::Google::Visualization::DataTable DateTime File::Slurp URI::Encode Search::QueryParser::SQL Module::Load::Conditional Digest::MD5 Hash::Merge::Simple Digest::SHA Archive::Extract Apache::Admin::Config Text::CSV Log::Log4perl::Appender::Socket::UNIX Plack::Middleware::XForwardedFor Try::Tiny Data::Serializable
+			cpanm Time::Local Time::HiRes Moose JSON::XS Config::JSON Plack::Builder Plack::Util Plack::App::File Date::Manip Digest::SHA1 MIME::Base64 URI::Escape Socket Net::DNS Sys::Hostname::FQDN String::CRC32 CHI CHI::Driver::RawMemory Search::QueryParser AnyEvent::DBI DBD::mysql EV Sys::Info MooseX::Traits Authen::Simple Authen::Simple::DBI Authen::Simple::LDAP Net::LDAP::Express Net::LDAP::FilterBuilder Plack::Middleware::CrossOrigin URI::Escape Module::Pluggable Module::Install PDF::API2::Simple XML::Writer Parse::Snort Spreadsheet::WriteExcel IO::String Mail::Internet Plack::Middleware::Static Log::Log4perl Email::LocalDelivery Plack::Session Sys::Info CHI::Driver::DBI Plack::Builder::Conditionals URL::Encode MooseX::ClassAttribute MooseX::Log::Log4perl Authen::Simple::DBI Plack::Middleware::NoMultipleSlashes MooseX::Storage MooseX::Clone Data::Google::Visualization::DataSource Data::Google::Visualization::DataTable DateTime File::Slurp URI::Encode Search::QueryParser::SQL Module::Load::Conditional Digest::MD5 Hash::Merge::Simple Digest::SHA Archive::Extract Apache::Admin::Config Text::CSV Log::Log4perl::Appender::Socket::UNIX Plack::Middleware::XForwardedFor Try::Tiny Data::Serializable
 			#This fails unless forced
 			cpanm --force Authen::Simple::Kerberos
 			cpanm --force AnyEvent::HTTP
+			cpanm --force Sys::MemInfo
 		else
 			cpanm Time::Local Time::HiRes Moose JSON::XS Config::JSON Plack::Builder Plack::Util Plack::App::File Date::Manip Digest::SHA1 MIME::Base64 URI::Escape Socket Net::DNS Sys::Hostname::FQDN String::CRC32 CHI CHI::Driver::RawMemory Search::QueryParser AnyEvent::DBI DBD::mysql EV Sys::Info Sys::MemInfo MooseX::Traits Authen::Simple Authen::Simple::DBI Authen::Simple::LDAP Net::LDAP::Express Net::LDAP::FilterBuilder Plack::Middleware::CrossOrigin URI::Escape Module::Pluggable Module::Install PDF::API2::Simple XML::Writer Parse::Snort Spreadsheet::WriteExcel IO::String Mail::Internet Plack::Middleware::Static Log::Log4perl Email::LocalDelivery Plack::Session Sys::Info CHI::Driver::DBI Plack::Builder::Conditionals AnyEvent::HTTP URL::Encode MooseX::ClassAttribute MooseX::Log::Log4perl Authen::Simple::DBI Plack::Middleware::NoMultipleSlashes MooseX::Storage MooseX::Clone Data::Google::Visualization::DataSource Data::Google::Visualization::DataTable DateTime File::Slurp URI::Encode Search::QueryParser::SQL Module::Load::Conditional Authen::Simple::Kerberos Digest::MD5 Hash::Merge::Simple Digest::SHA Archive::Extract Apache::Admin::Config Text::CSV Log::Log4perl::Appender::Socket::UNIX Plack::Middleware::XForwardedFor Try::Tiny Data::Serializable
 		fi	
