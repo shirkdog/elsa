@@ -1,4 +1,4 @@
-#!/bin/sh
+#!bin/sh
 
 ##############################
 ##############################
@@ -123,7 +123,7 @@ elif [ -f /bin/freebsd-version ] && [ -f /etc/pkg/FreeBSD.conf ]; then
 	env ASSUME_ALWAYS_YES=YES pkg bootstrap
 	env ASSUME_ALWAYS_YES=YES pkg update -f
 	if [ ! -d "/usr/local/etc/$APACHE" ]; then
-		APACHE="apache22";
+		APACHE="apache24";
 	fi
 fi
 
@@ -132,6 +132,16 @@ if [ -f /etc/elsa_vars.sh ]; then
 	. /etc/elsa_vars.sh
 fi
 
+# Validate that the necessary directories exist
+if [ ! -e $BASE_DIR/elsa ]; then
+	echo "Ensure that the elsa repo exists at $BASE_DIR/elsa";
+	exit;
+fi
+if [ ! -e $DATA_DIR ]; then
+	echo "Ensure that the $DATA_DIR exists";
+	exit;
+fi
+	
 echo "Assuming distro to be $DISTRO"
 
 MYSQL_PASS_SWITCH=""
@@ -194,14 +204,14 @@ freebsd_get_node_packages(){
 	if [ "$USE_LOCAL_MYSQL_PACKAGES" = 0 ]; then
 		pkg install -y mysql55-server
 	fi
-	pkg install -y subversion wget curl perl syslog-ng p5-App-cpanminus &&
+	pkg install -y subversion wget curl perl5 syslog-ng p5-App-cpanminus &&
 	enable_service "mysql" &&
 	service mysql-server start &&
 	disable_service "syslogd" &&
 	# This could fail if it's already disabled
 	service syslogd stop
 	
-	# Check to see if we got syslog-ng v3 from pkg_add
+	# Check to see if we got syslog-ng v3 from pkg install
 	pkg info -E -x syslog-ng | cut -d\- -f3 | egrep "^3\."
 	if [ $? -eq 1 ]; then
 		echo "Added old syslog-ng, correcting with syslog-ng3"
@@ -212,22 +222,29 @@ freebsd_get_node_packages(){
 	if [ \! -f /usr/local/etc/syslog-ng.conf ]; then
 		cp /usr/local/etc/syslog-ng.conf.dist /usr/local/etc/syslog-ng.conf
 	fi
+
+	#In version 3.6 of syslog-ng, s_network is defined in the default conf
+	sed -i '' -e 's/source s_network/source s_network_default/g' /usr/local/etc/syslog-ng.conf
+
 	if [ \! -f /usr/local/etc/elsa_syslog-ng.conf ]; then
 		# Copy the syslog-ng.conf
 		echo "Creating elsa_syslog-ng.conf"
 		cat "$BASE_DIR/elsa/node/conf/syslog-ng.conf" | sed -e "s|\/usr\/local|$BASE_DIR|g" | sed -e "s|\/data|$DATA_DIR|g" > "/usr/local/etc/elsa_syslog-ng.conf" &&
-		echo "@include \"elsa_syslog-ng.conf\"" >> /usr/local/etc/syslog-ng.conf
+		echo "@include \"/usr/local/etc/elsa_syslog-ng.conf\"" >> /usr/local/etc/syslog-ng.conf
 	else 
 		grep "elsa_syslog-ng.conf" /usr/local/etc/elsa_syslog-ng.conf
 		if [ $? -ne 0 ]; then
 			# Copy the syslog-ng.conf
 			echo "Creating elsa_syslog-ng.conf"
 			cat "$BASE_DIR/elsa/node/conf/syslog-ng.conf" | sed -e "s|\/usr\/local|$BASE_DIR|g" | sed -e "s|\/data|$DATA_DIR|g" > "/usr/local/etc/elsa_syslog-ng.conf" &&
-			echo "@include \"elsa_syslog-ng.conf\"" >> /usr/local/etc/syslog-ng.conf
+			echo "@include \"/usr/local/etc/elsa_syslog-ng.conf\"" >> /usr/local/etc/syslog-ng.conf
 		else 
 			echo "/usr/local/etc/syslog-ng.conf already configured"
 		fi
 	fi
+	#In version 3.6 of syslog-ng, nobackref is no longer a matcher flag
+	sed -i '' -e 's/ "nobackref"//g' /usr/local/etc/elsa_syslog-ng.conf
+
 	enable_service "syslog-ng" &&
 	service syslog-ng start
 	pgrep syslog-ng
@@ -293,7 +310,7 @@ freebsd_get_node_packages_ports(){
 		# Copy the syslog-ng.conf
 		echo "Creating elsa_syslog-ng.conf"
 		cat "$BASE_DIR/elsa/node/conf/syslog-ng.conf" | sed -e "s|\/usr\/local|$BASE_DIR|g" | sed -e "s|\/data|$DATA_DIR|g" > "/usr/local/etc/elsa_syslog-ng.conf" &&
-		echo "@include \"elsa_syslog-ng.conf\"" >> /usr/local/etc/syslog-ng.conf
+		echo "@include \"/usr/local/etc/elsa_syslog-ng.conf\"" >> /usr/local/etc/syslog-ng.conf
 	fi
 	
 	disable_service "syslogd" &&
@@ -432,7 +449,7 @@ build_node_perl(){
 	
 	return $RETVAL
 }
-
+:
 enable_service(){
 	if [ "$DISTRO" = "centos" ] || [ "$DISTRO" = "suse" ]; then
 		chkconfig $1 on
@@ -469,11 +486,16 @@ disable_service(){
 
 build_sphinx(){
 	# Get and build sphinx on nodes
-	cd $TMP_DIR &&
-	curl http://sphinxsearch.com/files/sphinx-$SPHINX_VER.tar.gz > sphinx-$SPHINX_VER.tar.gz &&
-	tar xzvf sphinx-$SPHINX_VER.tar.gz &&
-	cd sphinx-$SPHINX_VER &&
-	./configure --enable-id64 "--prefix=$BASE_DIR/sphinx" && make && make install &&
+	if [ "$DISTRO" = "freebsd" ]; then
+		#Use the port with options
+		cd /usr/ports/textproc/sphinxsearch && make -D ID64=YES -D MYSQL=YES PREFIX=$BASE_DIR/sphinx install clean 
+	else
+		cd $TMP_DIR &&
+		curl http://sphinxsearch.com/files/sphinx-$SPHINX_VER.tar.gz > sphinx-$SPHINX_VER.tar.gz &&
+		tar xzvf sphinx-$SPHINX_VER.tar.gz &&
+		cd sphinx-$SPHINX_VER &&
+		./configure --enable-id64 "--prefix=$BASE_DIR/sphinx" && make && make install 
+	fi
 	mkdir -p $BASE_DIR/etc &&
 	touch "$BASE_DIR/etc/sphinx_stopwords.txt"
 	if [ "$DISTRO" = "freebsd" ]; then
@@ -496,7 +518,7 @@ build_syslogng(){
 				echo "<patterndb version='3'></patterndb>" > /etc/elsa_local_patterndb.xml
 			fi
 			cat "$BASE_DIR/elsa/node/conf/syslog-ng.conf" | sed -e "s|\/usr\/local|$BASE_DIR|g" | sed -e "s|\/data|$DATA_DIR|g" > "/usr/local/etc/elsa_syslog-ng.conf" &&
-			echo "@include \"elsa_syslog-ng.conf\"" >> /usr/local/etc/syslog-ng.conf &&
+			echo "@include \"/usr/local/etc/elsa_syslog-ng.conf\"" >> /usr/local/etc/syslog-ng.conf &&
 			service syslog-ng restart
 		fi
 		return $?
@@ -825,31 +847,59 @@ set_syslogng_conf(){
 	fi
 	
 	# Merge stock patterndb.xml with elsa_local_patterndb.xml
-	$BASE_DIR/syslog-ng/bin/pdbtool merge -p $BASE_DIR/elsa/node/conf/merged.xml -r -D /etc/elsa/patterns.d
-	# Test
-	$BASE_DIR/syslog-ng/bin/pdbtool test $BASE_DIR/elsa/node/conf/merged.xml
-	if [ $? -eq 1 ]; then
-		echo "Error in merged patterndb"
-		return 1
+	if [ "$DISTRO" = "freebsd" ]; then
+		$BASE_DIR/bin/pdbtool merge -p $BASE_DIR/elsa/node/conf/merged.xml -r -D /etc/elsa/patterns.d
+		# Test
+		$BASE_DIR/bin/pdbtool test $BASE_DIR/elsa/node/conf/merged.xml
+		if [ $? -eq 1 ]; then
+			echo "Error in merged patterndb"
+			return 1
+		fi
+	else
+		$BASE_DIR/syslog-ng/bin/pdbtool merge -p $BASE_DIR/elsa/node/conf/merged.xml -r -D /etc/elsa/patterns.d
+		# Test
+		$BASE_DIR/syslog-ng/bin/pdbtool test $BASE_DIR/elsa/node/conf/merged.xml
+		if [ $? -eq 1 ]; then
+			echo "Error in merged patterndb"
+			return 1
+		fi
+	
 	fi
 	
 	# Copy the syslog-ng.conf
 	if [ -f $LOCAL_SYSLOG_CONF ]; then
 		echo "Including syslog-ng.conf include file located at $LOCAL_SYSLOG_CONF"
 		# Set unparsed logging destination if we're not using local
-		if [ "$FILTER_UNPARSED" = "1" ]; then
-			cat "$BASE_DIR/elsa/node/conf/syslog-ng.conf" | sed -e "s|\/usr\/local|$BASE_DIR|g" | sed -e "s|\/data|$DATA_DIR|g" | sed -e "s|###FILTER_UNPARSED###||" | sed -e "s|###INCLUDE_PLACEHOLDER###|include $LOCAL_SYSLOG_CONF\;|" > "$BASE_DIR/syslog-ng/etc/syslog-ng.conf"
+		if [ "$DISTRO" = "freebsd" ]; then
+			if [ "$FILTER_UNPARSED" = "1" ]; then
+				cat "$BASE_DIR/elsa/node/conf/syslog-ng.conf" | sed -e "s|\/usr\/local|$BASE_DIR|g" | sed -e "s|\/data|$DATA_DIR|g" | sed -e "s|###FILTER_UNPARSED###||" | sed -e "s|###INCLUDE_PLACEHOLDER###|include $LOCAL_SYSLOG_CONF\;|" > "$BASE_DIR/etc/syslog-ng.conf"
+			else
+				cat "$BASE_DIR/elsa/node/conf/syslog-ng.conf" | sed -e "s|\/usr\/local|$BASE_DIR|g" | sed -e "s|\/data|$DATA_DIR|g" | sed -e "s|###INCLUDE_PLACEHOLDER###|include $LOCAL_SYSLOG_CONF\;|" > "$BASE_DIR/syslog-ng/etc/syslog-ng.conf"
+			fi
 		else
-			cat "$BASE_DIR/elsa/node/conf/syslog-ng.conf" | sed -e "s|\/usr\/local|$BASE_DIR|g" | sed -e "s|\/data|$DATA_DIR|g" | sed -e "s|###INCLUDE_PLACEHOLDER###|include $LOCAL_SYSLOG_CONF\;|" > "$BASE_DIR/syslog-ng/etc/syslog-ng.conf"
+			if [ "$FILTER_UNPARSED" = "1" ]; then
+				cat "$BASE_DIR/elsa/node/conf/syslog-ng.conf" | sed -e "s|\/usr\/local|$BASE_DIR|g" | sed -e "s|\/data|$DATA_DIR|g" | sed -e "s|###FILTER_UNPARSED###||" | sed -e "s|###INCLUDE_PLACEHOLDER###|include $LOCAL_SYSLOG_CONF\;|" > "$BASE_DIR/syslog-ng/etc/syslog-ng.conf"
+			else
+				cat "$BASE_DIR/elsa/node/conf/syslog-ng.conf" | sed -e "s|\/usr\/local|$BASE_DIR|g" | sed -e "s|\/data|$DATA_DIR|g" | sed -e "s|###INCLUDE_PLACEHOLDER###|include $LOCAL_SYSLOG_CONF\;|" > "$BASE_DIR/syslog-ng/etc/syslog-ng.conf"
+			fi
 		fi
 	elif [ "$USE_LOCAL_SYSLOG_CONF" = "1" ]; then
 		echo "Not overwriting local syslog-ng.conf, all changes must be manually applied."
 	else
-		if [ "$FILTER_UNPARSED" = "1" ]; then
-			cat "$BASE_DIR/elsa/node/conf/syslog-ng.conf" | sed -e "s|\/usr\/local|$BASE_DIR|g" | sed -e "s|\/data|$DATA_DIR|g" | sed -e "s|###FILTER_UNPARSED###||" > "$BASE_DIR/syslog-ng/etc/syslog-ng.conf"
+		if [ "$DISTRO" = "freebsd" ]; then
+			if [ "$FILTER_UNPARSED" = "1" ]; then
+				cat "$BASE_DIR/elsa/node/conf/syslog-ng.conf" | sed -e "s|\/usr\/local|$BASE_DIR|g" | sed -e "s|\/data|$DATA_DIR|g" | sed -e "s|###FILTER_UNPARSED###||" > "$BASE_DIR/etc/syslog-ng.conf"
+			else
+				cat "$BASE_DIR/elsa/node/conf/syslog-ng.conf" | sed -e "s|\/usr\/local|$BASE_DIR|g" | sed -e "s|\/data|$DATA_DIR|g" > "$BASE_DIR/etc/syslog-ng.conf"
+			fi
 		else
-			cat "$BASE_DIR/elsa/node/conf/syslog-ng.conf" | sed -e "s|\/usr\/local|$BASE_DIR|g" | sed -e "s|\/data|$DATA_DIR|g" > "$BASE_DIR/syslog-ng/etc/syslog-ng.conf"
+			if [ "$FILTER_UNPARSED" = "1" ]; then
+				cat "$BASE_DIR/elsa/node/conf/syslog-ng.conf" | sed -e "s|\/usr\/local|$BASE_DIR|g" | sed -e "s|\/data|$DATA_DIR|g" | sed -e "s|###FILTER_UNPARSED###||" > "$BASE_DIR/syslog-ng/etc/syslog-ng.conf"
+			else
+				cat "$BASE_DIR/elsa/node/conf/syslog-ng.conf" | sed -e "s|\/usr\/local|$BASE_DIR|g" | sed -e "s|\/data|$DATA_DIR|g" > "$BASE_DIR/syslog-ng/etc/syslog-ng.conf"
+			fi
 		fi
+
 	fi
 		
 	return $?
@@ -915,7 +965,14 @@ set_logrotate(){
 	compress
 	maxage 60
 }" > /etc/logrotate.d/elsa
+	elif [ "$DISTRO" = "freebsd" ]; then
+		#use newsyslog
+		cat << EOF >> /etc/newsyslog.conf.d/elsa;
+#Logfile name			User:group	Mode	Count	Size	When	Flags				
+"$DATA_DIR/elsa/log/*log"	$WEB_USE:root	640	60	1000000	@00	CGZ	
+EOF
 	else
+
 		echo "WARNING: No /etc/logrotate.d directory not found, not installing ELSA utility log rotation"
 	fi
 }
@@ -957,13 +1014,13 @@ centos_get_web_packages(){
 }
 
 freebsd_get_web_packages(){
-	cd /usr/ports/www/mod_perl2 && make install clean
+	cd /usr/ports/www/mod_perl2 && make -DBATCH install clean
 	if [ "$USE_LOCAL_MYSQL_PACKAGES" = 0 ]; then
-		pkg_add -vFr mysql55-client
+		pkg install -y mysql55-client
 	fi
-	pkg_add -vFr subversion curl perl p5-App-cpanminus expat p5-Module-Build ap22-mod_perl2
+	pkg install -y subversion curl perl5 p5-App-cpanminus expat p5-Module-Build ap24-mod_perl2
 	RET=$?
-	# pkg_add will return 6 when packages were already present
+	# pkg install will return 6 when packages were already present
 	if [ "$RET" -ne 0 ] && [ "$RET" -ne 6 ]; then
 		echo "retval was $RET"
 		return 1
@@ -1009,8 +1066,15 @@ build_web_perl(){
 		# Installing specific version of Test::Simple@0.98 until this is resolved: https://rt.cpan.org/Public/Bug/Display.html?id=89473
 		cpanm Test::Simple@0.98
 		
-		cpanm Time::Local Time::HiRes Moose JSON::XS Config::JSON Plack::Builder Plack::Util Plack::App::File Date::Manip Digest::SHA1 MIME::Base64 URI::Escape Socket Net::DNS Sys::Hostname::FQDN String::CRC32 CHI CHI::Driver::RawMemory Search::QueryParser AnyEvent::DBI DBD::mysql EV Sys::Info Sys::MemInfo MooseX::Traits Authen::Simple Authen::Simple::DBI Authen::Simple::LDAP Net::LDAP::Express Net::LDAP::FilterBuilder Plack::Middleware::CrossOrigin URI::Escape Module::Pluggable Module::Install PDF::API2::Simple XML::Writer Parse::Snort Spreadsheet::WriteExcel IO::String Mail::Internet Plack::Middleware::Static Log::Log4perl Email::LocalDelivery Plack::Session Sys::Info CHI::Driver::DBI Plack::Builder::Conditionals AnyEvent::HTTP URL::Encode MooseX::ClassAttribute MooseX::Log::Log4perl Authen::Simple::DBI Plack::Middleware::NoMultipleSlashes MooseX::Storage MooseX::Clone Data::Google::Visualization::DataSource Data::Google::Visualization::DataTable DateTime File::Slurp URI::Encode Search::QueryParser::SQL Module::Load::Conditional Authen::Simple::Kerberos Digest::MD5 Hash::Merge::Simple Digest::SHA Archive::Extract Apache::Admin::Config Text::CSV Log::Log4perl::Appender::Socket::UNIX Plack::Middleware::XForwardedFor Try::Tiny Data::Serializable
-		
+		if [ "$DISTRO" = "freebsd" ]; then
+			cpanm Time::Local Time::HiRes Moose JSON::XS Config::JSON Plack::Builder Plack::Util Plack::App::File Date::Manip Digest::SHA1 MIME::Base64 URI::Escape Socket Net::DNS Sys::Hostname::FQDN String::CRC32 CHI CHI::Driver::RawMemory Search::QueryParser AnyEvent::DBI DBD::mysql EV Sys::Info Sys::MemInfo MooseX::Traits Authen::Simple Authen::Simple::DBI Authen::Simple::LDAP Net::LDAP::Express Net::LDAP::FilterBuilder Plack::Middleware::CrossOrigin URI::Escape Module::Pluggable Module::Install PDF::API2::Simple XML::Writer Parse::Snort Spreadsheet::WriteExcel IO::String Mail::Internet Plack::Middleware::Static Log::Log4perl Email::LocalDelivery Plack::Session Sys::Info CHI::Driver::DBI Plack::Builder::Conditionals URL::Encode MooseX::ClassAttribute MooseX::Log::Log4perl Authen::Simple::DBI Plack::Middleware::NoMultipleSlashes MooseX::Storage MooseX::Clone Data::Google::Visualization::DataSource Data::Google::Visualization::DataTable DateTime File::Slurp URI::Encode Search::QueryParser::SQL Module::Load::Conditional Digest::MD5 Hash::Merge::Simple Digest::SHA Archive::Extract Apache::Admin::Config Text::CSV Log::Log4perl::Appender::Socket::UNIX Plack::Middleware::XForwardedFor Try::Tiny Data::Serializable
+			#This fails unless forced
+			cpanm --force Authen::Simple::Kerberos
+			cpanm --force AnyEvent::HTTP
+		else
+			cpanm Time::Local Time::HiRes Moose JSON::XS Config::JSON Plack::Builder Plack::Util Plack::App::File Date::Manip Digest::SHA1 MIME::Base64 URI::Escape Socket Net::DNS Sys::Hostname::FQDN String::CRC32 CHI CHI::Driver::RawMemory Search::QueryParser AnyEvent::DBI DBD::mysql EV Sys::Info Sys::MemInfo MooseX::Traits Authen::Simple Authen::Simple::DBI Authen::Simple::LDAP Net::LDAP::Express Net::LDAP::FilterBuilder Plack::Middleware::CrossOrigin URI::Escape Module::Pluggable Module::Install PDF::API2::Simple XML::Writer Parse::Snort Spreadsheet::WriteExcel IO::String Mail::Internet Plack::Middleware::Static Log::Log4perl Email::LocalDelivery Plack::Session Sys::Info CHI::Driver::DBI Plack::Builder::Conditionals AnyEvent::HTTP URL::Encode MooseX::ClassAttribute MooseX::Log::Log4perl Authen::Simple::DBI Plack::Middleware::NoMultipleSlashes MooseX::Storage MooseX::Clone Data::Google::Visualization::DataSource Data::Google::Visualization::DataTable DateTime File::Slurp URI::Encode Search::QueryParser::SQL Module::Load::Conditional Authen::Simple::Kerberos Digest::MD5 Hash::Merge::Simple Digest::SHA Archive::Extract Apache::Admin::Config Text::CSV Log::Log4perl::Appender::Socket::UNIX Plack::Middleware::XForwardedFor Try::Tiny Data::Serializable
+		fi	
+
 		RETVAL=$?
 		if [ "$RETVAL" = 0 ]; then
 			break;
@@ -1180,7 +1244,11 @@ set_version(){
 	else 
 		echo "revision:$VERSION" | perl -e 'use Config::JSON; my $c = new Config::JSON("/etc/elsa_web.conf") or die($!); while(<>){ chomp; my ($k,$v) = split(/:/, $_, 2); next unless $k and $v; $c->set("version/$k", $v); } $c->write;'
 	fi
-	$BASE_DIR/sphinx/bin/searchd --help | head -1 | perl -e 'use Config::JSON; my $c = new Config::JSON("/etc/elsa_web.conf") or die($!); while(<>){ chomp; exit unless $_; $c->set("version/Sphinx", $_); } $c->write;'
+	if [ "$DISTRO" = "freebsd" ]; then
+		$BASE_DIR/sphinx/sbin/searchd --help | head -1 | perl -e 'use Config::JSON; my $c = new Config::JSON("/etc/elsa_web.conf") or die($!); while(<>){ chomp; exit unless $_; $c->set("version/Sphinx", $_); } $c->write;'
+	else
+		$BASE_DIR/sphinx/bin/searchd --help | head -1 | perl -e 'use Config::JSON; my $c = new Config::JSON("/etc/elsa_web.conf") or die($!); while(<>){ chomp; exit unless $_; $c->set("version/Sphinx", $_); } $c->write;'
+	fi
 }
 
 suse_set_apache(){
@@ -1305,18 +1373,23 @@ centos_set_apache(){
 
 freebsd_set_apache(){
 	# For Apache, locations vary, but this is the gist:
-	APACHE="apache2"
+	APACHE="apache24"
 	if [ ! -d "/usr/local/etc/$APACHE" ]; then
-		APACHE="apache22";
+		APACHE="apache24";
 	fi
 	if [ ! -d "/usr/local/etc/$APACHE" ]; then
-		echo "Cannot find Apache conf dir in apache2 or apache22!"
+		echo "Cannot find Apache conf dir in apache2 or apache24!"
 		return 0
 	fi
 	egrep "^LoadModule perl_module" /usr/local/etc/$APACHE/httpd.conf
 	if [ $? -ne 0 ]; then
 		echo "Enabling mod_perl"
 		echo "LoadModule perl_module libexec/$APACHE/mod_perl.so" >> /usr/local/etc/$APACHE/httpd.conf
+	fi
+	egrep "^LoadModule rewrite_module" /usr/local/etc/$APACHE/httpd.conf
+	if [ $? -ne 0 ]; then
+		echo "Enabling rewrite module"
+		echo "LoadModule rewrite_module libexec/$APACHE/mod_rewrite.so" >> /usr/local/etc/$APACHE/httpd.conf
 	fi
 	cpanm Plack::Handler::Apache2
 	if [ "$USE_LOCAL_APACHE_CONF" = "1" ]; then
@@ -1327,7 +1400,7 @@ freebsd_set_apache(){
 	chown -R $WEB_USER "$DATA_DIR/elsa/log"
 	
 	# Ensure that Apache has the right prefork settings
-	APACHE_CONF="/usr/local/etc/apache22/httpd.conf"
+	APACHE_CONF="/usr/local/etc/$APACHE/httpd.conf"
 	cp $APACHE_CONF "$APACHE_CONF.elsabak"
 	set_apache_tuning $APACHE_CONF "mpm_prefork_module";
 	
